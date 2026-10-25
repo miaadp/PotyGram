@@ -20,6 +20,11 @@ class ApiResponse {
 class ApiClient {
   static Dio? _dio;
   static String? _baseUrl;
+  static String? _sessionCookie;
+
+  static void clearSession() {
+    _sessionCookie = null;
+  }
 
   static Future<Dio> get dio async {
     final currentUrl = await SecureKeyStorage.getServerUrl();
@@ -40,16 +45,32 @@ class ApiClient {
           final rememberToken = await SecureKeyStorage.loadRememberToken();
           final csrfToken = await SecureKeyStorage.loadCsrfToken();
 
-          if (rememberToken != null) {
+          if (rememberToken != null && rememberToken.isNotEmpty) {
             options.headers[AppConstants.headerRememberToken] = rememberToken;
           }
-          if (csrfToken != null) {
+          if (csrfToken != null && csrfToken.isNotEmpty) {
             options.headers[AppConstants.headerCsrfToken] = csrfToken;
+          }
+          if (_sessionCookie != null && _sessionCookie!.isNotEmpty) {
+            options.headers['Cookie'] = _sessionCookie;
           }
           return handler.next(options);
         },
         onResponse: (response, handler) async {
-          // Absorb token rotations
+          // 1. Absorb session cookie (PHPSESSID) for PHP challenge handshake
+          final cookies = response.headers['set-cookie'];
+          if (cookies != null && cookies.isNotEmpty) {
+            for (final c in cookies) {
+              if (c.contains('PHPSESSID=')) {
+                final match = RegExp(r'PHPSESSID=([^;]+)').firstMatch(c);
+                if (match != null) {
+                  _sessionCookie = 'PHPSESSID=${match.group(1)}';
+                }
+              }
+            }
+          }
+
+          // 2. Absorb token rotations
           final newRemember = response.headers.value(AppConstants.headerNewRememberToken);
           final newCsrf = response.headers.value(AppConstants.headerNewCsrfToken);
 

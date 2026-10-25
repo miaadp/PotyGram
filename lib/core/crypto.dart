@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:convert/convert.dart';
-import 'package:sodium_libs/sodium_libs.dart';
+import 'package:sodium_libs/sodium_libs_sumo.dart';
 
 class KeyPairSet {
   final String pubkey;       // 64 hex chars (32 bytes) - X25519
@@ -20,14 +20,14 @@ class KeyPairSet {
 }
 
 class PotyCrypto {
-  static Sodium? _sodium;
+  static SodiumSumo? _sodium;
 
   static Future<void> init() async {
     if (_sodium != null) return;
-    _sodium = await SodiumInit.init();
+    _sodium = await SodiumSumoInit.init();
   }
 
-  static Sodium get sodium {
+  static SodiumSumo get sodium {
     final s = _sodium;
     if (s == null) {
       throw StateError('PotyCrypto not initialized. Call await PotyCrypto.init() first.');
@@ -52,7 +52,6 @@ class PotyCrypto {
     final signSecretKeyHex = hex.encode(signPair.secretKey.extractBytes());
     signPair.secretKey.dispose();
 
-
     return KeyPairSet(
       pubkey: pubkeyHex.toLowerCase(),
       secretKey: secretKeyHex.toLowerCase(),
@@ -61,45 +60,94 @@ class PotyCrypto {
     );
   }
 
-  /// Parse user's secret key backup string: `<secretKey> | sign:<signSecretKey>`
-  /// or derive signing key if only secret key provided.
+  /// Parse user's secret key from all supported formats:
+  /// - Standard: `<secretKey> | sign:<signSecretKey>`
+  /// - Backup file text: containing `Secret Key: ...` and `Sign Secret Key: ...`
+  /// - JSON backup: `{"pubkey": "...", "secretKey": "...", ...}`
+  /// - Pipe separated: `<secretKey> | <signSecretKey>`
   static KeyPairSet parseSecretKey(String rawInput) {
-    final input = rawInput.trim();
-    if (!input.contains(' | sign:')) {
-      throw const FormatException('Incomplete key. Make sure to copy the entire key including " | sign:"');
+    String input = rawInput.trim();
+    if (input.isEmpty) {
+      throw const FormatException('Please enter your secret key.');
     }
 
-    final parts = input.split(' | sign:').map((s) => s.trim().toLowerCase()).toList();
-    final secretKeyHex = parts[0];
-    final signSecretKeyHex = parts[1];
+    String? secretKeyHex;
+    String? signSecretKeyHex;
 
+    // 1. Check for JSON format
+    try {
+      if (input.startsWith('{') && input.endsWith('}')) {
+        final data = json.decode(input);
+        if (data is Map) {
+          secretKeyHex = data['secretKey']?.toString().trim();
+          signSecretKeyHex = data['signSecretKey']?.toString().trim();
+        }
+      }
+    } catch (_) {}
+
+    // 2. Check for PotyGram TXT backup file format
+    if (secretKeyHex == null && input.contains('Secret Key:')) {
+      final lines = input.split('\n');
+      for (final line in lines) {
+        final l = line.trim();
+        if (l.startsWith('Secret Key:')) {
+          secretKeyHex = l.substring('Secret Key:'.length).trim();
+        } else if (l.startsWith('Sign Secret Key:')) {
+          signSecretKeyHex = l.substring('Sign Secret Key:'.length).trim();
+        }
+      }
+    }
+
+    // 3. Check for standard combined format: "<secretKey> | sign:<signSecretKey>"
+    if (secretKeyHex == null && input.contains(' | sign:')) {
+      final parts = input.split(' | sign:').map((s) => s.trim()).toList();
+      secretKeyHex = parts[0];
+      signSecretKeyHex = parts.length > 1 ? parts[1] : '';
+    } else if (secretKeyHex == null && input.contains('|')) {
+      final parts = input.split('|').map((s) => s.trim().replaceAll('sign:', '')).toList();
+      secretKeyHex = parts[0];
+      signSecretKeyHex = parts.length > 1 ? parts[1] : '';
+    }
+
+    // 4. Raw key if only 64 hex characters provided
+    if (secretKeyHex == null) {
+      secretKeyHex = input;
+    }
+
+    secretKeyHex = secretKeyHex.toLowerCase().trim();
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(secretKeyHex)) {
-      throw const FormatException('Invalid encryption secret key format (expected 64 hex chars)');
-    }
-    if (!RegExp(r'^[0-9a-f]{64,128}$').hasMatch(signSecretKeyHex)) {
-      throw const FormatException('Invalid signing secret key format (expected 128 hex chars)');
+      throw const FormatException('Invalid encryption secret key (expected 64 hex characters).');
     }
 
     final s = sodium;
-    // Derive X25519 public key from X25519 secret key
+    // Derive X25519 public key using crypto_scalarmult_base (identical to web libsodium)
     final skBytes = Uint8List.fromList(hex.decode(secretKeyHex));
     final secureSk = SecureKey.fromList(s, skBytes);
-    final boxPair = s.crypto.box.seedKeyPair(secureSk);
-    final pubkeyHex = hex.encode(boxPair.publicKey).toLowerCase();
+    final pubkeyBytes = s.crypto.scalarmult.base(n: secureSk);
+    final pubkeyHex = hex.encode(pubkeyBytes).toLowerCase();
     secureSk.dispose();
-    boxPair.secretKey.dispose();
 
-
-    // In libsodium, Ed25519 SK is 64 bytes: [32-byte seed][32-byte pubkey]
-    final signSkBytes = Uint8List.fromList(hex.decode(signSecretKeyHex));
     String signPubkeyHex;
-    if (signSkBytes.length >= 64) {
-      final signPkBytes = signSkBytes.sublist(32, 64);
-      signPubkeyHex = hex.encode(signPkBytes).toLowerCase();
+    if (signSecretKeyHex != null && RegExp(r'^[0-9a-f]{64,128}$').hasMatch(signSecretKeyHex.toLowerCase())) {
+      signSecretKeyHex = signSecretKeyHex.toLowerCase().trim();
+      final signSkBytes = Uint8List.fromList(hex.decode(signSecretKeyHex));
+      if (signSkBytes.length >= 64) {
+        // Last 32 bytes of 64-byte Ed25519 secret key is the public key
+        signPubkeyHex = hex.encode(signSkBytes.sublist(32, 64)).toLowerCase();
+      } else {
+        // 32-byte seed
+        final secureSeed = SecureKey.fromList(s, signSkBytes.sublist(0, 32));
+        final pair = s.crypto.sign.seedKeyPair(secureSeed);
+        signPubkeyHex = hex.encode(pair.publicKey).toLowerCase();
+        secureSeed.dispose();
+        pair.secretKey.dispose();
+      }
     } else {
-      final secureSeed = SecureKey.fromList(s, signSkBytes.sublist(0, 32));
+      // If sign secret key wasn't provided, derive Ed25519 deterministically from the 32-byte secret key
+      final secureSeed = SecureKey.fromList(s, skBytes);
       final pair = s.crypto.sign.seedKeyPair(secureSeed);
       signPubkeyHex = hex.encode(pair.publicKey).toLowerCase();
+      signSecretKeyHex = hex.encode(pair.secretKey.extractBytes()).toLowerCase();
       secureSeed.dispose();
       pair.secretKey.dispose();
     }
@@ -112,7 +160,7 @@ class PotyCrypto {
     );
   }
 
-  /// Create detached signature of a message (e.g. login challenge, registration proof, message hash)
+  /// Create detached signature of a message string (e.g. login challenge, registration proof)
   static String signDetached(String message, String signSecretKeyHex) {
     final msgBytes = Uint8List.fromList(utf8.encode(message));
     final sigBytes = signBytesDetached(msgBytes, signSecretKeyHex);
@@ -168,7 +216,7 @@ class PotyCrypto {
     }
   }
 
-  /// Decrypt raw bytes from sealed box (used for files/thumbnails)
+  /// Decrypt raw bytes from sealed box
   static Uint8List? decryptBoxSealBytes(Uint8List ciphertextBytes, String myPubkeyHex, String mySecretKeyHex) {
     try {
       final s = sodium;

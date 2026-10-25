@@ -103,11 +103,24 @@ class _HomeScreenState extends State<HomeScreen> {
                           searchError = null;
                         });
 
-                        final res = await ApiClient.get('user', {'query': q});
+                        ApiResponse res;
+                        if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(q)) {
+                          res = await ApiClient.get('user', {'pubkey': q.toLowerCase()});
+                        } else {
+                          res = await ApiClient.get('search', {'q': q});
+                        }
+
                         setModalState(() {
                           isSearchingUser = false;
-                          if (res.ok && res.data is Map && res.data['user'] != null) {
-                            foundUser = Map<String, dynamic>.from(res.data['user']);
+                          if (res.ok && res.data is Map) {
+                            final d = res.data as Map;
+                            if (d['users'] is List && (d['users'] as List).isNotEmpty) {
+                              foundUser = Map<String, dynamic>.from(d['users'][0]);
+                            } else if (d['pubkey'] != null) {
+                              foundUser = Map<String, dynamic>.from(d);
+                            } else {
+                              searchError = 'User not found (@$q)';
+                            }
                           } else {
                             searchError = res.error ?? 'User not found';
                           }

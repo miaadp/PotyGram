@@ -28,7 +28,7 @@ class AuthProvider with ChangeNotifier {
       final profileMap = await SecureKeyStorage.loadProfile();
       final rememberToken = await SecureKeyStorage.loadRememberToken();
 
-      if (keys != null && rememberToken != null) {
+      if (keys != null) {
         _myKeys = keys;
         _myProfile = UserProfile(
           pubkey: keys.pubkey,
@@ -37,25 +37,30 @@ class AuthProvider with ChangeNotifier {
           verified: profileMap['verified'] == 1,
         );
 
-        // Verify with server via bootstrap
-        final res = await ApiClient.get('bootstrap');
-        if (res.ok && res.data is Map) {
-          final meData = res.data['me'];
-          if (meData is Map && meData['authenticated'] == true) {
-            _myProfile = UserProfile.fromJson(Map<String, dynamic>.from(meData));
-            await SecureKeyStorage.saveProfile(
-              username: _myProfile!.username,
-              displayName: _myProfile!.displayName,
-              verified: _myProfile!.verified ? 1 : 0,
-            );
-            SyncService().start(_myKeys!);
+        if (rememberToken != null && rememberToken.isNotEmpty) {
+          // Verify with server via bootstrap
+          final res = await ApiClient.get('bootstrap');
+          if (res.ok && res.data is Map) {
+            final meData = res.data['me'];
+            if (meData is Map && meData['authenticated'] == true) {
+              _myProfile = UserProfile.fromJson(Map<String, dynamic>.from(meData));
+              await SecureKeyStorage.saveProfile(
+                username: _myProfile!.username,
+                displayName: _myProfile!.displayName,
+                verified: _myProfile!.verified ? 1 : 0,
+              );
+              SyncService().start(_myKeys!);
+            } else {
+              // Re-authenticate using keys
+              await _silentReauth(keys);
+            }
           } else {
-            // Re-authenticate using keys
-            await _silentReauth(keys);
+            // Offline mode - proceed with cached session
+            SyncService().start(_myKeys!);
           }
         } else {
-          // Offline mode - proceed with cached session
-          SyncService().start(_myKeys!);
+          // Re-authenticate using keys
+          await _silentReauth(keys);
         }
       }
     } catch (e) {
@@ -123,6 +128,22 @@ class AuthProvider with ChangeNotifier {
 
       final challenge = meRes.data?['challenge'] as String?;
       if (challenge == null) {
+        if (meRes.data?['authenticated'] == true &&
+            (meRes.data?['pubkey'] as String?)?.toLowerCase() == keys.pubkey.toLowerCase()) {
+          // Already authenticated with this pubkey
+          await SecureKeyStorage.saveKeys(keys);
+          _myKeys = keys;
+          _myProfile = UserProfile(
+            pubkey: keys.pubkey,
+            username: (meRes.data?['username'] ?? '').toString(),
+            displayName: (meRes.data?['display_name'] ?? meRes.data?['username'] ?? keys.pubkey.substring(0, 8)).toString(),
+            verified: meRes.data?['verified'] == 1 || meRes.data?['verified'] == true,
+          );
+          SyncService().start(keys);
+          _isLoading = false;
+          notifyListeners();
+          return true;
+        }
         _authError = 'No login challenge received from server';
         _isLoading = false;
         notifyListeners();

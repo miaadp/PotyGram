@@ -81,8 +81,8 @@ class ChatProvider with ChangeNotifier {
 
       // 2. Fetch history from server
       final res = await ApiClient.get('messages', {
-        'peer_pubkey': peerPubkey,
-        'limit': 50,
+        'peer': peerPubkey,
+        'last': 50,
       });
 
       if (res.ok && res.data is Map) {
@@ -231,9 +231,9 @@ class ChatProvider with ChangeNotifier {
   }
 
   void markRead(int lastId) {
+    if (lastId <= 0) return;
     ApiClient.post('mark_read', {
-      'peer_pubkey': peerPubkey,
-      'id': lastId,
+      'ids': [lastId],
     }).catchError((_) {});
   }
 
