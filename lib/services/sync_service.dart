@@ -89,17 +89,24 @@ class SyncService {
             final peerPk = isOut ? recipPk : senderPk;
 
             // Decrypt ciphertext
+            final deletedAt = (msgMap['deleted_at'] as num?)?.toInt();
+            final editedAt = (msgMap['edited_at'] as num?)?.toInt();
+
             String? plainText;
-            final rawCipher = isOut ? msgMap['sender_ciphertext'] : msgMap['ciphertext'];
-            if (rawCipher != null && rawCipher is String) {
-              try {
-                final ciphBytes = base64Decode(rawCipher);
-                plainText = PotyCrypto.decryptBoxSeal(
-                  Uint8List.fromList(ciphBytes),
-                  _myKeys!.pubkey,
-                  _myKeys!.secretKey,
-                );
-              } catch (_) {}
+            if (deletedAt != null && deletedAt > 0) {
+              plainText = 'This message was deleted';
+            } else {
+              final rawCipher = isOut ? msgMap['sender_ciphertext'] : msgMap['ciphertext'];
+              if (rawCipher != null && rawCipher is String) {
+                try {
+                  final ciphBytes = base64Decode(rawCipher);
+                  plainText = PotyCrypto.decryptBoxSeal(
+                    Uint8List.fromList(ciphBytes),
+                    _myKeys!.pubkey,
+                    _myKeys!.secretKey,
+                  );
+                } catch (_) {}
+              }
             }
 
             final message = Message(
@@ -116,6 +123,8 @@ class SyncService {
               sentAt: (msgMap['sent_at'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
               deliveredAt: (msgMap['delivered_at'] as num?)?.toInt(),
               readAt: (msgMap['read_at'] as num?)?.toInt(),
+              editedAt: editedAt,
+              deletedAt: deletedAt,
               isOut: isOut,
               isPending: false,
               isFailed: false,

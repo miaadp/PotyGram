@@ -91,7 +91,7 @@ class AppDatabase {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE conversations (
@@ -125,6 +125,8 @@ class AppDatabase {
             sent_at INTEGER,
             delivered_at INTEGER,
             read_at INTEGER,
+            edited_at INTEGER,
+            deleted_at INTEGER,
             is_out INTEGER,
             is_pending INTEGER,
             is_failed INTEGER,
@@ -134,6 +136,16 @@ class AppDatabase {
         ''');
 
         await db.execute('CREATE INDEX idx_msg_peer ON messages (peer_pubkey, id DESC)');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          try {
+            await db.execute('ALTER TABLE messages ADD COLUMN edited_at INTEGER');
+          } catch (_) {}
+          try {
+            await db.execute('ALTER TABLE messages ADD COLUMN deleted_at INTEGER');
+          } catch (_) {}
+        }
       },
     );
   }

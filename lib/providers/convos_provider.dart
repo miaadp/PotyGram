@@ -121,6 +121,18 @@ class ConvosProvider with ChangeNotifier {
     }
   }
 
+  Future<void> deleteConversation(String peerPubkey) async {
+    _convos.removeWhere((c) => c.peerPubkey == peerPubkey);
+    notifyListeners();
+
+    try {
+      final db = await AppDatabase.instance;
+      await db.delete('conversations', where: 'peer_pubkey = ?', whereArgs: [peerPubkey]);
+      await db.delete('messages', where: 'peer_pubkey = ?', whereArgs: [peerPubkey]);
+      await ApiClient.post('clear_convo', {'peer_pubkey': peerPubkey});
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _syncSub?.cancel();

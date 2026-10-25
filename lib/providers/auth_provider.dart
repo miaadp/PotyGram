@@ -269,6 +269,67 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
+  Future<bool> updateProfile({String? displayName, String? username, String? bio}) async {
+    try {
+      final payload = <String, dynamic>{};
+      if (displayName != null) payload['display_name'] = displayName.trim();
+      if (username != null) payload['username'] = username.trim().replaceAll('@', '');
+      if (bio != null) payload['bio'] = bio.trim();
+
+      final res = await ApiClient.post('profile', payload);
+      if (res.ok && res.data is Map) {
+        final d = res.data['profile'] as Map? ?? res.data as Map;
+        _myProfile = UserProfile(
+          pubkey: _myKeys!.pubkey,
+          username: (d['username'] ?? _myProfile?.username ?? '').toString(),
+          displayName: (d['display_name'] ?? _myProfile?.displayName ?? '').toString(),
+          verified: _myProfile?.verified ?? false,
+          avatar: _myProfile?.avatar,
+        );
+
+        await SecureKeyStorage.saveProfile(
+          username: _myProfile!.username,
+          displayName: _myProfile!.displayName,
+          verified: _myProfile!.verified ? 1 : 0,
+        );
+        notifyListeners();
+        return true;
+      } else {
+        _authError = res.error ?? 'Failed to update profile';
+        notifyListeners();
+      }
+    } catch (e) {
+      _authError = 'Profile update error: $e';
+      notifyListeners();
+    }
+    return false;
+  }
+
+  Future<bool> deleteAccount() async {
+    if (_myKeys == null) return false;
+    try {
+      final chRes = await ApiClient.get('delete_account_challenge');
+      if (!chRes.ok || chRes.data is! Map) return false;
+      final challenge = chRes.data['challenge'] as String?;
+      if (challenge == null) return false;
+
+      final proofMsg = 'delete_account:$challenge:${_myKeys!.pubkey}';
+      final proof = PotyCrypto.signDetached(proofMsg, _myKeys!.signSecretKey);
+
+      final res = await ApiClient.post('delete_account', {
+        'signing_pubkey': _myKeys!.signPubkey,
+        'proof': proof,
+        'proof_message': proofMsg,
+      });
+
+      if (res.ok) {
+        await logout();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   Future<void> logout() async {
     SyncService().stop();
     await ApiClient.post('logout', {});

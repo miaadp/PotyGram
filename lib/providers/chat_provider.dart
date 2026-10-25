@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:sqflite/sqflite.dart';
 import '../core/api.dart';
 import '../core/crypto.dart';
@@ -17,12 +18,17 @@ class ChatProvider with ChangeNotifier {
   List<Message> _messages = [];
   bool _isLoading = false;
   Message? _replyTo;
+  bool _isPeerOnline = false;
+  String? _peerPresenceText;
   StreamSubscription<Message>? _newMsgSub;
   StreamSubscription<Map<String, dynamic>>? _receiptSub;
+  Timer? _presenceTimer;
 
   List<Message> get messages => _messages;
   bool get isLoading => _isLoading;
   Message? get replyTo => _replyTo;
+  bool get isPeerOnline => _isPeerOnline;
+  String? get peerPresenceText => _peerPresenceText;
 
   ChatProvider({
     required this.peerPubkey,
@@ -55,6 +61,11 @@ class ChatProvider with ChangeNotifier {
           notifyListeners();
         }
       }
+    });
+
+    fetchPeerPresence();
+    _presenceTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      fetchPeerPresence();
     });
   }
 
@@ -98,18 +109,24 @@ class ChatProvider with ChangeNotifier {
             final senderPk = (map['sender_pubkey'] ?? '').toString().toLowerCase();
             final recipPk = (map['recipient_pubkey'] ?? '').toString().toLowerCase();
             final isOut = senderPk == myKeys.pubkey;
+            final deletedAt = (map['deleted_at'] as num?)?.toInt();
+            final editedAt = (map['edited_at'] as num?)?.toInt();
 
             String? text;
-            final cipher = isOut ? map['sender_ciphertext'] : map['ciphertext'];
-            if (cipher != null && cipher is String) {
-              try {
-                final ciphBytes = base64Decode(cipher);
-                text = PotyCrypto.decryptBoxSeal(
-                  Uint8List.fromList(ciphBytes),
-                  myKeys.pubkey,
-                  myKeys.secretKey,
-                );
-              } catch (_) {}
+            if (deletedAt != null && deletedAt > 0) {
+              text = 'This message was deleted';
+            } else {
+              final cipher = isOut ? map['sender_ciphertext'] : map['ciphertext'];
+              if (cipher != null && cipher is String) {
+                try {
+                  final ciphBytes = base64Decode(cipher);
+                  text = PotyCrypto.decryptBoxSeal(
+                    Uint8List.fromList(ciphBytes),
+                    myKeys.pubkey,
+                    myKeys.secretKey,
+                  );
+                } catch (_) {}
+              }
             }
 
             final msg = Message(
@@ -126,6 +143,8 @@ class ChatProvider with ChangeNotifier {
               sentAt: (map['sent_at'] as num?)?.toInt() ?? 0,
               deliveredAt: (map['delivered_at'] as num?)?.toInt(),
               readAt: (map['read_at'] as num?)?.toInt(),
+              editedAt: editedAt,
+              deletedAt: deletedAt,
               isOut: isOut,
               isPending: false,
               isFailed: false,
@@ -143,6 +162,7 @@ class ChatProvider with ChangeNotifier {
           if (_messages.isNotEmpty) {
             markRead(_messages.last.id);
           }
+          fetchReactions();
         }
       }
     } catch (e) {
@@ -237,8 +257,168 @@ class ChatProvider with ChangeNotifier {
     }).catchError((_) {});
   }
 
+  Future<bool> editMessage(int msgId, String newText) async {
+    final clean = newText.trim();
+    if (clean.isEmpty) return false;
+
+    try {
+      final ciphBytes = PotyCrypto.encryptBoxSeal(clean, peerPubkey);
+      final senderCiphBytes = PotyCrypto.encryptBoxSeal(clean, myKeys.pubkey);
+      final sigBytes = PotyCrypto.signBytesDetached(ciphBytes, myKeys.signSecretKey);
+
+      final formData = FormData.fromMap({
+        'id': msgId,
+        'ciphertext': MultipartFile.fromBytes(ciphBytes, filename: 'ciphertext.bin'),
+        'sender_ciphertext': MultipartFile.fromBytes(senderCiphBytes, filename: 'sender_ciphertext.bin'),
+        'signature': MultipartFile.fromBytes(sigBytes, filename: 'signature.bin'),
+      });
+
+      final res = await ApiClient.postMultipart('edit', formData);
+      if (res.ok) {
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        final idx = _messages.indexWhere((m) => m.id == msgId);
+        if (idx >= 0) {
+          _messages[idx] = _messages[idx].copyWith(text: clean, editedAt: now);
+          final db = await AppDatabase.instance;
+          await db.update('messages', {'text': clean, 'edited_at': now}, where: 'id = ?', whereArgs: [msgId]);
+          notifyListeners();
+        }
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[ChatProvider] Edit error: $e');
+    }
+    return false;
+  }
+
+  Future<bool> deleteMessage(int msgId) async {
+    try {
+      final res = await ApiClient.post('delete', {'id': msgId});
+      if (res.ok) {
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        final idx = _messages.indexWhere((m) => m.id == msgId);
+        if (idx >= 0) {
+          _messages[idx] = _messages[idx].copyWith(deletedAt: now, text: 'This message was deleted');
+          final db = await AppDatabase.instance;
+          await db.update('messages', {'deleted_at': now, 'text': 'This message was deleted'}, where: 'id = ?', whereArgs: [msgId]);
+          notifyListeners();
+        }
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[ChatProvider] Delete error: $e');
+    }
+    return false;
+  }
+
+  Future<bool> clearChat() async {
+    try {
+      final res = await ApiClient.post('clear_convo', {'peer_pubkey': peerPubkey});
+      if (res.ok) {
+        _messages = [];
+        final db = await AppDatabase.instance;
+        await db.delete('messages', where: 'peer_pubkey = ?', whereArgs: [peerPubkey]);
+        notifyListeners();
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[ChatProvider] Clear chat error: $e');
+    }
+    return false;
+  }
+
+  Future<void> fetchReactions() async {
+    try {
+      final res = await ApiClient.get('reactions', {'peer': peerPubkey});
+      if (res.ok && res.data is Map && res.data['reactions'] is Map) {
+        final allRx = res.data['reactions'] as Map;
+        bool changed = false;
+
+        for (int i = 0; i < _messages.length; i++) {
+          final m = _messages[i];
+          final mRx = allRx[m.id.toString()];
+          if (mRx is Map) {
+            final Map<String, List<String>> rxMap = {};
+            mRx.forEach((k, v) {
+              if (v is List) {
+                rxMap[k.toString()] = v.map((e) => e.toString()).toList();
+              }
+            });
+            _messages[i] = m.copyWith(reactions: rxMap);
+            changed = true;
+          }
+        }
+        if (changed) notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> toggleReaction(int msgId, String emoji) async {
+    final idx = _messages.indexWhere((m) => m.id == msgId);
+    if (idx >= 0) {
+      final msg = _messages[idx];
+      final currentMap = Map<String, List<String>>.from(msg.reactions);
+      final list = List<String>.from(currentMap[emoji] ?? []);
+      if (list.contains(myKeys.pubkey)) {
+        list.remove(myKeys.pubkey);
+        if (list.isEmpty) {
+          currentMap.remove(emoji);
+        } else {
+          currentMap[emoji] = list;
+        }
+      } else {
+        list.add(myKeys.pubkey);
+        currentMap[emoji] = list;
+      }
+      _messages[idx] = msg.copyWith(reactions: currentMap);
+      notifyListeners();
+    }
+
+    try {
+      await ApiClient.post('reactions', {
+        'msg_id': msgId,
+        'emoji': emoji,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> fetchPeerPresence() async {
+    try {
+      final res = await ApiClient.get('presence', {'pubkeys': peerPubkey});
+      if (res.ok && res.data is Map && res.data['presence'] is Map) {
+        final pMap = res.data['presence'] as Map;
+        final lastSeen = (pMap[peerPubkey] as num?)?.toInt() ?? 0;
+        final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+        if (lastSeen > 0) {
+          final diff = now - lastSeen;
+          if (diff <= 120) {
+            _isPeerOnline = true;
+            _peerPresenceText = 'Online';
+          } else if (diff < 3600) {
+            _isPeerOnline = false;
+            final mins = (diff / 60).round();
+            _peerPresenceText = 'Last seen ${mins}m ago';
+          } else if (diff < 86400) {
+            _isPeerOnline = false;
+            final hours = (diff / 3600).round();
+            _peerPresenceText = 'Last seen ${hours}h ago';
+          } else {
+            _isPeerOnline = false;
+            _peerPresenceText = 'Last seen ${DateFormat('d MMM').format(DateTime.fromMillisecondsSinceEpoch(lastSeen * 1000))}';
+          }
+        } else {
+          _isPeerOnline = false;
+          _peerPresenceText = null;
+        }
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
+    _presenceTimer?.cancel();
     SyncService().setActiveChat(null);
     _newMsgSub?.cancel();
     _receiptSub?.cancel();

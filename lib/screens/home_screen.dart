@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../core/api.dart';
@@ -173,6 +174,86 @@ class _HomeScreenState extends State<HomeScreen> {
     return DateFormat('d MMM').format(dt);
   }
 
+  void _showConvoOptions(BuildContext context, ConvosProvider convosProv, Conversation c) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(AppConstants.cardColorHex),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: AvatarWidget(displayName: c.displayName, avatarUrl: c.avatar, size: 40),
+              title: Text(c.displayName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: Text('@${c.username.isNotEmpty ? c.username : c.peerPubkey.substring(0, 10)}', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            ),
+            const Divider(color: Colors.white12),
+            ListTile(
+              leading: const Icon(Icons.mark_chat_read_outlined, color: Colors.white70),
+              title: const Text('Mark as Read', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(ctx);
+                convosProv.markConvoRead(c.peerPubkey);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.copy, color: Colors.white70),
+              title: const Text('Copy Public Key', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: c.peerPubkey));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Public key copied!')),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              title: const Text('Delete Conversation', style: TextStyle(color: Colors.redAccent)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _confirmDeleteConvo(context, convosProv, c);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmDeleteConvo(BuildContext context, ConvosProvider convosProv, Conversation c) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(AppConstants.cardColorHex),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Delete conversation with ${c.displayName}?', style: const TextStyle(color: Colors.white, fontSize: 17)),
+        content: const Text(
+          'This will permanently delete this conversation and all messages from this device and the server.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () {
+              Navigator.pop(ctx);
+              convosProv.deleteConversation(c.peerPubkey);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
@@ -272,13 +353,27 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 itemBuilder: (ctx, i) {
                   final c = convosProv.convos[i];
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    leading: AvatarWidget(
-                      displayName: c.displayName,
-                      avatarUrl: c.avatar,
-                      size: 50,
+                  return Dismissible(
+                    key: ValueKey('convo_${c.peerPubkey}'),
+                    direction: DismissDirection.endToStart,
+                    confirmDismiss: (dir) async {
+                      _confirmDeleteConvo(context, convosProv, c);
+                      return false;
+                    },
+                    background: Container(
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 20),
+                      color: Colors.redAccent.withOpacity(0.8),
+                      child: const Icon(Icons.delete_outline, color: Colors.white),
                     ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      onLongPress: () => _showConvoOptions(context, convosProv, c),
+                      leading: AvatarWidget(
+                        displayName: c.displayName,
+                        avatarUrl: c.avatar,
+                        size: 50,
+                      ),
                     title: Row(
                       children: [
                         Flexible(
@@ -348,8 +443,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         MaterialPageRoute(builder: (_) => ChatScreen(conversation: c)),
                       );
                     },
-                  );
-                },
+                  ),
+                );
+              },
               ),
       ),
       floatingActionButton: FloatingActionButton(

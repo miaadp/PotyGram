@@ -12,6 +12,9 @@ class Message {
   final int sentAt;
   final int? deliveredAt;
   final int? readAt;
+  final int? editedAt;
+  final int? deletedAt;
+  final Map<String, List<String>> reactions;
   final bool isOut;
   final bool isPending;
   final bool isFailed;
@@ -32,6 +35,9 @@ class Message {
     required this.sentAt,
     this.deliveredAt,
     this.readAt,
+    this.editedAt,
+    this.deletedAt,
+    this.reactions = const {},
     required this.isOut,
     this.isPending = false,
     this.isFailed = false,
@@ -41,8 +47,21 @@ class Message {
 
   bool get isRead => readAt != null && readAt! > 0;
   bool get isDelivered => deliveredAt != null && deliveredAt! > 0;
+  bool get isEdited => editedAt != null && editedAt! > 0;
+  bool get isDeleted => deletedAt != null && deletedAt! > 0;
 
   factory Message.fromMap(Map<String, dynamic> map) {
+    Map<String, List<String>> rxMap = {};
+    if (map['reactions'] != null) {
+      if (map['reactions'] is Map) {
+        (map['reactions'] as Map).forEach((k, v) {
+          if (v is List) {
+            rxMap[k.toString()] = v.map((e) => e.toString()).toList();
+          }
+        });
+      }
+    }
+
     return Message(
       id: (map['id'] is num) ? (map['id'] as num).toInt() : 0,
       peerPubkey: (map['peer_pubkey'] ?? '').toString().toLowerCase(),
@@ -57,6 +76,9 @@ class Message {
       sentAt: (map['sent_at'] is num) ? (map['sent_at'] as num).toInt() : 0,
       deliveredAt: (map['delivered_at'] is num) ? (map['delivered_at'] as num).toInt() : null,
       readAt: (map['read_at'] is num) ? (map['read_at'] as num).toInt() : null,
+      editedAt: (map['edited_at'] is num) ? (map['edited_at'] as num).toInt() : null,
+      deletedAt: (map['deleted_at'] is num) ? (map['deleted_at'] as num).toInt() : null,
+      reactions: rxMap,
       isOut: map['is_out'] == 1 || map['is_out'] == true,
       isPending: map['is_pending'] == 1 || map['is_pending'] == true,
       isFailed: map['is_failed'] == 1 || map['is_failed'] == true,
@@ -79,6 +101,8 @@ class Message {
     'sent_at': sentAt,
     'delivered_at': deliveredAt,
     'read_at': readAt,
+    'edited_at': editedAt,
+    'deleted_at': deletedAt,
     'is_out': isOut ? 1 : 0,
     'is_pending': isPending ? 1 : 0,
     'is_failed': isFailed ? 1 : 0,
@@ -91,6 +115,9 @@ class Message {
     String? text,
     int? deliveredAt,
     int? readAt,
+    int? editedAt,
+    int? deletedAt,
+    Map<String, List<String>>? reactions,
     bool? isPending,
     bool? isFailed,
   }) {
@@ -108,6 +135,9 @@ class Message {
       sentAt: sentAt,
       deliveredAt: deliveredAt ?? this.deliveredAt,
       readAt: readAt ?? this.readAt,
+      editedAt: editedAt ?? this.editedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      reactions: reactions ?? this.reactions,
       isOut: isOut,
       isPending: isPending ?? this.isPending,
       isFailed: isFailed ?? this.isFailed,
