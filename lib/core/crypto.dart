@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:convert/convert.dart';
-import 'package:sodium/sodium.dart';
 import 'package:sodium_libs/sodium_libs.dart';
 
 class KeyPairSet {
@@ -85,9 +84,11 @@ class PotyCrypto {
     // Derive X25519 public key from X25519 secret key
     final skBytes = Uint8List.fromList(hex.decode(secretKeyHex));
     final secureSk = SecureKey.fromList(s, skBytes);
-    final pkBytes = s.crypto.scalarMult.base(n: secureSk);
+    final boxPair = s.crypto.box.seedKeyPair(secureSk);
+    final pubkeyHex = hex.encode(boxPair.publicKey).toLowerCase();
     secureSk.dispose();
-    final pubkeyHex = hex.encode(pkBytes).toLowerCase();
+    boxPair.secretKey.dispose();
+
 
     // In libsodium, Ed25519 SK is 64 bytes: [32-byte seed][32-byte pubkey]
     final signSkBytes = Uint8List.fromList(hex.decode(signSecretKeyHex));

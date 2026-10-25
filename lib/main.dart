@@ -38,7 +38,7 @@ class PotyGramApp extends StatelessWidget {
             secondary: Color(AppConstants.primaryColorHex),
             surface: Color(AppConstants.cardColorHex),
           ),
-          cardTheme: const CardTheme(
+          cardTheme: const CardThemeData(
             color: Color(AppConstants.cardColorHex),
             elevation: 0,
           ),
