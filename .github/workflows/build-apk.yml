@@ -50,6 +50,11 @@ jobs:
         run: |
           flutter build apk --release -v 2>&1 | tee build.log || (echo "=== BUILD LOG FAILURE TAIL ===" && tail -n 250 build.log && exit 1)
 
+      - name: Locate Generated APK
+        run: |
+          echo "=== Found APKs ==="
+          find build -type f -name "*.apk" -ls
+
       - name: Upload Build Failure Log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -62,6 +67,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: potygram-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/**/*.apk
           if-no-files-found: error
           retention-days: 30
