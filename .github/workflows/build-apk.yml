@@ -37,12 +37,25 @@ jobs:
           rm -rf android
           flutter create . --platforms=android --org com.potygram --project-name potygram
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.VIBRATE"/>' android/app/src/main/AndroidManifest.xml
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle 2>/dev/null || true
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts 2>/dev/null || true
 
       - name: Install Flutter Dependencies
         run: flutter pub get
 
+      - name: Analyze Dart Code
+        run: flutter analyze
+
       - name: Build Release APK
-        run: flutter build apk --release --verbose
+        run: |
+          flutter build apk --release -v 2>&1 | tee build.log || (echo "=== BUILD LOG FAILURE TAIL ===" && tail -n 250 build.log && exit 1)
+
+      - name: Upload Build Failure Log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-log
+          path: build.log
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
