@@ -7,6 +7,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     name: Build PotyGram Android APK
@@ -36,29 +39,38 @@ jobs:
         run: |
           rm -rf android
           flutter create . --platforms=android --org com.potygram --project-name potygram
-          python3 -c '
-          with open("android/app/src/main/AndroidManifest.xml", "r") as f:
+          
+          # Detect installed NDK version
+          NDK_VER=$(ls -1 $ANDROID_HOME/ndk 2>/dev/null | tail -n 1 || echo "")
+          echo "Detected installed Android NDK: $NDK_VER"
+
+          python3 -c "
+          import os
+
+          ndk_ver = '$NDK_VER'
+
+          with open('android/app/src/main/AndroidManifest.xml', 'r') as f:
               content = f.read()
-          perms = """
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-              <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-              <uses-permission android:name="android.permission.VIBRATE"/>
-          """
-          content = content.replace("<application", perms + "\n    <application", 1)
-          with open("android/app/src/main/AndroidManifest.xml", "w") as f:
+          perms = '''
+              <uses-permission android:name=\"android.permission.INTERNET\"/>
+              <uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>
+              <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>
+              <uses-permission android:name=\"android.permission.VIBRATE\"/>
+          '''
+          content = content.replace('<application', perms + '\n    <application', 1)
+          with open('android/app/src/main/AndroidManifest.xml', 'w') as f:
               f.write(content)
           
-          for fname in ["android/app/build.gradle", "android/app/build.gradle.kts"]:
-              try:
-                  with open(fname, "r") as f:
+          for fname in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+              if os.path.exists(fname):
+                  with open(fname, 'r') as f:
                       c = f.read()
-                  c = c.replace("flutter.minSdkVersion", "24")
-                  with open(fname, "w") as f:
+                  c = c.replace('flutter.minSdkVersion', '24')
+                  if ndk_ver:
+                      c = c.replace('flutter.ndkVersion', f'\"{ndk_ver}\"')
+                  with open(fname, 'w') as f:
                       f.write(c)
-              except Exception:
-                  pass
-          '
+          "
           echo "=== Manifest Preview ==="
           head -n 25 android/app/src/main/AndroidManifest.xml
 
@@ -86,13 +98,16 @@ jobs:
           echo "=== Dist folder contents ==="
           ls -lh dist/
 
-      - name: Upload Build Failure Log
+      - name: Save Build Failure to Branch
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-failure-log
-          path: build.log
-          if-no-files-found: ignore
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B debug-log
+          tail -n 300 build.log > build-error.txt
+          git add build-error.txt
+          git commit -m "build failure log"
+          git push -f origin debug-log || true
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
