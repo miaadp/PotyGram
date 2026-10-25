@@ -73,7 +73,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B debug-log
-          tail -n 300 build.log > build-error.txt
+          tail -n 1000 build.log > build-error.txt
           git add build-error.txt
           git commit -m "build failure log"
           git push -f origin debug-log || true
