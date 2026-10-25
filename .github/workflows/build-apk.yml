@@ -41,52 +41,56 @@ jobs:
           flutter create . --platforms=android --org com.potygram --project-name potygram
           
           # Detect installed NDK version
-          NDK_VER=$(ls -1 $ANDROID_HOME/ndk 2>/dev/null | tail -n 1 || echo "")
+          export NDK_VER=$(ls -1 $ANDROID_HOME/ndk 2>/dev/null | tail -n 1 || echo "")
           echo "Detected installed Android NDK: $NDK_VER"
 
-          python3 -c "
-          import os
+          python3 - << 'EOF'
+import os
 
-          ndk_ver = '$NDK_VER'
+ndk_ver = os.environ.get('NDK_VER', '')
 
-          with open('android/app/src/main/AndroidManifest.xml', 'r') as f:
-              content = f.read()
-          perms = '''
-              <uses-permission android:name=\"android.permission.INTERNET\"/>
-              <uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>
-              <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>
-              <uses-permission android:name=\"android.permission.VIBRATE\"/>
-          '''
-          content = content.replace('<application', perms + '\n    <application', 1)
-          with open('android/app/src/main/AndroidManifest.xml', 'w') as f:
-              f.write(content)
-          
-          for fname in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
-              if os.path.exists(fname):
-                  with open(fname, 'r') as f:
-                      c = f.read()
-                  c = c.replace('compileSdk = flutter.compileSdkVersion', 'compileSdk = 36')
-                  c = c.replace('compileSdkVersion flutter.compileSdkVersion', 'compileSdkVersion 36')
-                  c = c.replace('compileSdkVersion = flutter.compileSdkVersion', 'compileSdkVersion = 36')
-                  c = c.replace('flutter.minSdkVersion', '24')
-                  c = c.replace('minSdk = flutter.minSdkVersion', 'minSdk = 24')
-                  c = c.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 24')
-                  if ndk_ver:
-                      c = c.replace('flutter.ndkVersion', f'\"{ndk_ver}\"')
-                  with open(fname, 'w') as f:
-                      f.write(c)
+# 1. Update AndroidManifest.xml
+manifest_path = 'android/app/src/main/AndroidManifest.xml'
+with open(manifest_path, 'r') as f:
+    content = f.read()
+perms = '''
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+'''
+content = content.replace('<application', perms + '\n    <application', 1)
+with open(manifest_path, 'w') as f:
+    f.write(content)
 
-          subprojects_config = '''
+# 2. Update app build.gradle to compileSdk 36 and minSdk 24
+for fname in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+    if os.path.exists(fname):
+        with open(fname, 'r') as f:
+            c = f.read()
+        c = c.replace('compileSdk = flutter.compileSdkVersion', 'compileSdk = 36')
+        c = c.replace('compileSdkVersion flutter.compileSdkVersion', 'compileSdkVersion 36')
+        c = c.replace('compileSdkVersion = flutter.compileSdkVersion', 'compileSdkVersion = 36')
+        c = c.replace('flutter.minSdkVersion', '24')
+        c = c.replace('minSdk = flutter.minSdkVersion', 'minSdk = 24')
+        c = c.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 24')
+        if ndk_ver:
+            c = c.replace('flutter.ndkVersion', f'"{ndk_ver}"')
+        with open(fname, 'w') as f:
+            f.write(c)
+
+# 3. Configure subprojects in root build.gradle to use compileSdk 36 and skip AarMetadata
+subprojects_config = '''
 
 allprojects {
-    tasks.matching { it.name.contains(\"AarMetadata\") }.configureEach {
+    tasks.matching { it.name.contains("AarMetadata") }.configureEach {
         enabled = false
     }
 }
 
 subprojects {
     afterEvaluate { project ->
-        if (project.hasProperty(\"android\")) {
+        if (project.hasProperty("android")) {
             try {
                 project.android {
                     compileSdkVersion 36
@@ -96,12 +100,13 @@ subprojects {
     }
 }
 '''
-          for root_file in ['android/build.gradle', 'android/build.gradle.kts']:
-              if os.path.exists(root_file):
-                  print(f'Configuring {root_file}...')
-                  with open(root_file, 'a') as f:
-                      f.write(subprojects_config)
-          "
+for root_file in ['android/build.gradle', 'android/build.gradle.kts']:
+    if os.path.exists(root_file):
+        print(f"Configuring {root_file}...")
+        with open(root_file, 'a') as f:
+            f.write(subprojects_config)
+EOF
+
           echo "=== Manifest Preview ==="
           head -n 25 android/app/src/main/AndroidManifest.xml
 
@@ -149,7 +154,7 @@ subprojects {
           retention-days: 30
 
       - name: Publish GitHub Release
-        if: success() && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
