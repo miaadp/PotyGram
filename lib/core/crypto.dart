@@ -45,13 +45,14 @@ class PotyCrypto {
     final boxPair = s.crypto.box.keyPair();
     final pubkeyHex = hex.encode(boxPair.publicKey);
     final secretKeyHex = hex.encode(boxPair.secretKey.extractBytes());
-    boxPair.dispose();
+    boxPair.secretKey.dispose();
 
     // 2. Sign Keypair (Ed25519)
     final signPair = s.crypto.sign.keyPair();
     final signPubkeyHex = hex.encode(signPair.publicKey);
     final signSecretKeyHex = hex.encode(signPair.secretKey.extractBytes());
-    signPair.dispose();
+    signPair.secretKey.dispose();
+
 
     return KeyPairSet(
       pubkey: pubkeyHex.toLowerCase(),
@@ -99,7 +100,7 @@ class PotyCrypto {
       final pair = s.crypto.sign.seedKeyPair(secureSeed);
       signPubkeyHex = hex.encode(pair.publicKey).toLowerCase();
       secureSeed.dispose();
-      pair.dispose();
+      pair.secretKey.dispose();
     }
 
     return KeyPairSet(
