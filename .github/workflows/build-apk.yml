@@ -32,14 +32,17 @@ jobs:
       - name: Verify Flutter Installation
         run: flutter doctor -v
 
-      - name: Ensure Android platform wrapper
-        run: flutter create . --platforms=android --org com.potygram
+      - name: Generate Native Android Platform Files
+        run: |
+          rm -rf android
+          flutter create . --platforms=android --org com.potygram --project-name potygram
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.VIBRATE"/>' android/app/src/main/AndroidManifest.xml
 
       - name: Install Flutter Dependencies
         run: flutter pub get
 
       - name: Build Release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --verbose
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
